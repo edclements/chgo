@@ -7,7 +7,7 @@ for dir in "$CHGO_ROOT/versions"; do
 done
 unset dir
 
-mkdir -p $CHGO_ROOT/tmp
+mkdir -p $CHGO_ROOT/tmp/gopath
 
 function chgo_reset()
 {
@@ -23,9 +23,10 @@ function chgo_install()
 {
   version=$1
   installdir=$CHGO_ROOT/versions/$version
+  tmpdir=${installdir}-working
   logfile=$CHGO_ROOT/tmp/$version-$(date "+%s").log
 
-  mkdir -p $installdir
+  mkdir -p $tmpdir
   platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
   if [ "$(uname -m)" = "x86_64" ]; then arch="amd64"
@@ -48,15 +49,46 @@ function chgo_install()
     ( \
       (curl -v -f $download_url) || (curl -v -f $alternate_url) \
     ) | \
-    tar zxv --strip-components 1 -C $installdir; exit "${PIPESTATUS[0]}" \
+    tar zxv --strip-components 1 -C $tmpdir; exit "${PIPESTATUS[0]}" \
   ) 2>$logfile >$logfile || \
     {
-      rm -rf $installdir
+      rm -rf $tmpdir
 
       echo "chgo: unable to install Go \`${version}'" >&2
       echo "chgo: see ${logfile} for details" >&2
       return 1
     }
+
+  oldGoPath=$GOPATH
+  oldGoRoot=$GOROOT
+
+{
+  GOROOT=$tmpdir GOPATH=$CHGO_ROOT/tmp/gopath $tmpdir/bin/go get github.com/inconshreveable/gonative 
+  mkdir -p $installdir
+  pushd $installdir
+  GOROOT=$tmpdir GOPATH=$CHGO_ROOT/tmp/gopath $CHGO_ROOT/tmp/gopath/bin/gonative build -version=$version
+  mv go/* .
+  popd
+} || \
+  # ( \
+  #   (GOROOT=$tmpdir GOPATH=$CHGO_ROOT/tmp/gopath $tmpdir/bin/go get github.com/inconshreveable/gonative) && \
+  #   (mkdir -p $installdir) && \
+  #   (pushd $installdir) && \
+  #   (GOROOT=$tmpdir GOPATH=$CHGO_ROOT/tmp/gopath $CHGO_ROOT/tmp/gopath/bin/gonative build -version=$version) && \
+  #   (mv go/* . ) && \
+  #   (popd) \
+  # ) 2>$logfile >$logfile || \
+  {
+    rm -rf $tmpdir
+    rm -rf $installdir
+    echo "chgo: unable to install Go \`${version}'" >&2
+    echo "chgo: see ${logfile} for details" >&2
+    return 1
+  }
+
+  GOPATH=$oldGoPath
+  GOROOT=$oldGoRoot
+  rm -rf $tmpdir
 
   rm $logfile
   echo "chgo: installed ${version} to ${installdir}"
